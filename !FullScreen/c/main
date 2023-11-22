@@ -1,0 +1,365 @@
+/*******************************************************************************
+
+File        : c.main
+
+Date        : Wednesday 22th November 2023
+
+Author      : Gavin Cawley
+
+Description : Program to demonstrate a basic animation loop for games that
+              run outside the desktop.
+
+History     : 06/02/2021 - v0.01 - started work as !circles
+              13/02/2021 - v0.10 - added animation loop
+              22/11/2023 - v1.00 - adapted from !animation
+
+*******************************************************************************/
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <math.h>
+                 
+#include "bbc.h"
+#include "wimp.h"
+#include "wimpt.h"
+#include "resspr.h"
+#include "baricon.h"
+#include "res.h"
+#include "event.h"
+#include "menu.h"
+#include "dbox.h"
+#include "win.h"
+#include "template.h"
+#include "swis.h"           
+
+#define APP_NAME "FullScreen"
+#define MENU_ITEMS ">Info,Quit"
+                    
+#define IMENU_INFO 1
+#define IMENU_QUIT 2
+
+menu imenu;
+
+typedef struct
+{      
+   double x, y, r, dx, dy;
+}
+Circle;         
+                        
+#define CIRCLES (16)
+
+Circle circle[CIRCLES];
+
+/*******************************************************************************
+
+Function    : void
+
+Parameters  : void
+
+Returns     : int - monotonic time in centi-seconds
+
+Description : Determine monotonic time (i.e. the number of centi-seconds that
+              have passed since the machine was last restarted).
+
+*******************************************************************************/
+           
+int getMonotonicTime(void)
+{
+   _kernel_swi_regs regs;
+
+   _kernel_swi(OS_ReadMonotonicTime, &regs, &regs);
+       
+   return regs.r[0];
+}
+
+/*******************************************************************************
+
+Function    : update
+
+Parameters  : void
+
+Returns     : void
+
+Description : Each circle in turn is undrawn by XORing it onto the screen 
+              again at it's current location, updating it's coordinates and
+              direction, and the XORing it to the screen at it's new location.
+
+*******************************************************************************/
+
+void update(void)
+{                        
+   // update each circle in turn
+
+   for (int i = 0; i < CIRCLES; i++)
+   {                                      
+      // undraw circle
+
+      bbc_circle((int)circle[i].x, (int)circle[i].y, (int)circle[i].r);
+                      
+      // calculate new position
+
+      circle[i].x = circle[i].x + circle[i].dx;
+      circle[i].y = circle[i].y + circle[i].dy;
+
+      if (circle[i].x - circle[i].r < 0.0)
+      {                       
+         if (circle[i].dx < 0)
+         {
+            circle[i].dx = -circle[i].dx;
+         }
+      }
+      
+      if (circle[i].x + circle[i].r > 1280.0)
+      {                       
+         if (circle[i].dx > 0)
+         {
+            circle[i].dx = -circle[i].dx;
+         }
+      }
+
+      if (circle[i].y - circle[i].r < 0.0)
+      {                       
+         if (circle[i].dy < 0)
+         {
+            circle[i].dy = -circle[i].dy;
+         }
+      }
+
+      if (circle[i].y + circle[i].r > 1024.0)
+      {                       
+         if (circle[i].dy > 0)
+         {
+            circle[i].dy = -circle[i].dy;
+         }
+      }   
+
+      // redraw circle
+
+      bbc_circle((int)circle[i].x, (int)circle[i].y, (int)circle[i].r);
+   }
+}
+           
+/*******************************************************************************
+
+Function    : run_animation
+
+Parameters  : void
+
+Returns     : void
+
+Description : Function called to run the animation outside the desktop,
+              however it first captures the description of the current
+              screen mode so that it can be restored when the animation is
+              over.  The circles are drawn by XORing them to the screen, so
+              this function must draw them the first time before entering
+              the animation loop.  The monotonic time is used to control
+              the speed of the animation.
+
+*******************************************************************************/
+           
+#define WIMP_SetMode (0x400E3)
+
+void run_animation(void)
+{      
+   // get information on current screen mode
+          
+   _kernel_swi_regs regs;
+                            
+   regs.r[0] = 1;
+
+   _kernel_swi(OS_ScreenMode, &regs, &regs);
+       
+   // leave the desktop
+
+   bbc_mode(20); 
+   bbc_gcol(3, 2);
+   bbc_clg();
+
+   // initialise circles and draw them
+
+   for (int i = 0; i < CIRCLES; i++)
+   {             
+      double velocity   = (double)(64 - rand()%63);
+      double direction  = 2*3.14159*rand()/(double)RAND_MAX;
+
+      circle[i].x       = (double)(640 + rand()%128);
+      circle[i].y       = (double)(512 + rand()%128);
+      circle[i].r       = (double)(32  + rand()%64);                                  
+      circle[i].dx      = velocity*cos(direction);
+      circle[i].dy      = velocity*sin(direction);
+
+      bbc_circle((int)circle[i].x, (int)circle[i].y, (int)circle[i].r);
+   }
+
+   // main animation loop
+                
+   int time = getMonotonicTime();
+
+   do
+   {
+       if (time < getMonotonicTime())
+       {
+          update();
+
+          time += 5;
+       }
+   }
+   while (!bbc_inkey(-17));   // quit if q key is pressed  
+
+   // return to the desktop
+
+   regs.r[0] = regs.r[1];
+
+   _kernel_swi(WIMP_SetMode, &regs, &regs);
+
+}
+           
+/*******************************************************************************
+
+Function    : info_about
+
+Parameters  : void
+
+Returns     : void 
+
+Description : Function called to display the "Program Info" dialog box.
+
+*******************************************************************************/
+           
+static void info_about(void)
+{
+   dbox d = dbox_new("ProgInfo");
+
+   if (d != NULL)
+   {
+      dbox_show(d);        
+      dbox_fillin(d);       
+      dbox_dispose(&d);     
+   }
+}
+           
+/*******************************************************************************
+
+Function    : ipremenuproc
+
+Parameters  : void* - pointer to workspace (unused)
+
+Returns     : menu
+
+Description : Function called to prepare menu (essentially a stub for this
+              application as menu structure is very basic).
+
+*******************************************************************************/
+           
+static menu ipremenuproc(void *handle)
+{
+   return imenu;
+}
+           
+/*******************************************************************************
+
+Function    : imenuproc
+
+Parameters  : void* - pointer to workspace (unused)
+              char* - menu item selected
+
+Returns     : void
+
+Description : Handle selection of items on the menu attached to the application
+              icon on the icon bar.
+
+*******************************************************************************/
+           
+static void imenuproc(void *handle, char *hit)
+{
+   switch (hit[0])  
+   {                
+      case IMENU_INFO:
+      {
+         info_about();
+
+         break;
+      }
+      case IMENU_QUIT:
+      {
+         exit(EXIT_SUCCESS);
+
+         break;
+      }
+   }
+}
+           
+/*******************************************************************************
+
+Function    : left_icon_click
+
+Parameters  : wimp_i icon
+
+Returns     : void
+
+Description : Handler for left mouse click on the icon on the icon bar.
+
+*******************************************************************************/
+           
+static void icon_left_click(wimp_i icon)
+{
+   run_animation();
+}
+           
+/*******************************************************************************
+
+Function    : main 
+
+Parameters  : void
+
+Returns     : int - indicates whether program completed successfully
+
+Description : Main function - perform initialisation and execute event loop
+              indefinitely.
+
+*******************************************************************************/
+           
+int main(void)
+{                                         
+   wimpt_init(APP_NAME);
+
+   res_init(APP_NAME);   
+
+   template_init();              
+
+   dbox_init();     
+
+   baricon("!fullscreen", (int)resspr_area(), icon_left_click);
+
+   imenu = menu_new(APP_NAME, MENU_ITEMS);
+                    
+   if (imenu == NULL)
+   {
+      return EXIT_FAILURE;
+   }
+
+   if (!event_attachmenumaker(win_ICONBAR, ipremenuproc, imenuproc, 0))
+   {
+      return EXIT_FAILURE;
+   }                    
+
+   // register icon menu and middle click handler 
+
+   if (!event_attachmenumaker(win_ICONBAR, ipremenuproc, imenuproc, 0))
+   {
+      return FALSE;
+   }               
+
+   // main even processing loop
+
+   while (TRUE) 
+   {
+      event_process();
+   }
+                    
+   wimp_closedown();
+
+   return EXIT_SUCCESS;
+}
+
+/******************************************************************************/
